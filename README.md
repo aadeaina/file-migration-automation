@@ -1,5 +1,7 @@
 # file-migration-automation
 
+[![Tests](https://github.com/aadeaina/file-migration-automation/actions/workflows/tests.yml/badge.svg)](https://github.com/aadeaina/file-migration-automation/actions/workflows/tests.yml)
+
 On-prem-to-multicloud file & permission migration automation: migrates
 files and NTFS folder/file ACLs from an on-prem Windows file server to
 AWS FSx for Windows File Server, Azure Files (AD-joined), and GCP
