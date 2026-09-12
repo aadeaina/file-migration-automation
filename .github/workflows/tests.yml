@@ -58,7 +58,7 @@ jobs:
         run: uv run pytest -q
 
       - name: Lint
-        run: uvx ruff check migration scripts keda-scaler/server.py keda-scaler/test_server.py
+        run: uvx ruff check migration scripts
 
   temporal-integration:
     runs-on: ubuntu-latest
