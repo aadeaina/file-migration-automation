@@ -1,0 +1,22 @@
+# Not part of the standing deployment -- a one-shot Job proving the
+# worker Deployment actually processes real Temporal workflows.
+# Requires WORKER_DEMO_MODE=1 on migration-worker (see README.md).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k8s-smoke-test
+  namespace: file-migration
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: smoke-test
+          image: file-migration-automation:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "scripts/k8s_smoke_test.py"]
+          envFrom:
+            - configMapRef: {name: app-config}
+            - secretRef: {name: app-secrets}

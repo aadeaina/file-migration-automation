@@ -1,0 +1,92 @@
+# All-in-one Temporal server (temporalio/auto-setup runs
+# frontend/matching/history/worker services in a single process) --
+# fine for this demo, not how you'd run Temporal in production. For
+# real use: Temporal Cloud (no server to operate) or the official
+# temporal-helm-charts (separately scaled services), per the earlier
+# scaling discussion.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal
+  namespace: file-migration
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: temporal}
+  template:
+    metadata:
+      labels: {app: temporal}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: temporal
+          image: temporalio/auto-setup:1.24
+          ports:
+            - containerPort: 7233
+          env:
+            - name: DB
+              value: postgres12
+            - name: DB_PORT
+              value: "5432"
+            - name: POSTGRES_SEEDS
+              value: postgres
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: app-secrets, key: DB_USER}}
+            - name: POSTGRES_PWD
+              valueFrom: {secretKeyRef: {name: app-secrets, key: DB_PASSWORD}}
+            - name: DBNAME
+              value: temporal
+            - name: VISIBILITY_DBNAME
+              value: temporal_visibility
+          readinessProbe:
+            tcpSocket: {port: 7233}
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+  namespace: file-migration
+spec:
+  selector: {app: temporal}
+  ports:
+    - port: 7233
+      targetPort: 7233
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-ui
+  namespace: file-migration
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: temporal-ui}
+  template:
+    metadata:
+      labels: {app: temporal-ui}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: temporal-ui
+          image: temporalio/ui:2.31.2
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: temporal:7233
+            - name: TEMPORAL_CORS_ORIGINS
+              value: "http://localhost:3000"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-ui
+  namespace: file-migration
+spec:
+  selector: {app: temporal-ui}
+  ports:
+    - port: 8080
+      targetPort: 8080

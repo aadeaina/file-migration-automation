@@ -1,0 +1,26 @@
+# CPU-based scaling -- the pragmatic default with no extra components.
+# The metric that actually matters for a Temporal worker is task-queue
+# backlog, not CPU (a worker can be CPU-idle while starved for work, or
+# CPU-busy while draining a huge backlog); getting that requires KEDA's
+# temporal-based ScaledObject (queries Temporal's visibility API) or a
+# custom-metrics adapter exporting queue depth to the metrics API. Swap
+# this for a KEDA ScaledObject once that's wired up.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: migration-worker
+  namespace: file-migration
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: migration-worker
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

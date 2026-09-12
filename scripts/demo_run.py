@@ -16,7 +16,6 @@ import asyncio
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import django
 
@@ -27,22 +26,23 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "1")
 django.setup()
 
-from django.utils import timezone  # noqa: E402
-from temporalio.client import Client  # noqa: E402
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker  # noqa: E402
+from django.utils import timezone
+from temporalio.client import Client
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from migration.cloud_adapters.aws import AWSAdapter  # noqa: E402
-from migration.cloud_adapters.azure import AzureAdapter  # noqa: E402
-from migration.cloud_adapters.gcp import GCPAdapter  # noqa: E402
-from migration.cloud_adapters.testing import FakeNfs4AclApplier, FakeTransport  # noqa: E402
-from migration.cutover.activities import CutoverActivities  # noqa: E402
-from migration.cutover.workflows import (  # noqa: E402
+from migration.cloud_adapters.aws import AWSAdapter
+from migration.cloud_adapters.azure import AzureAdapter
+from migration.cloud_adapters.gcp import GCPAdapter
+from migration.cloud_adapters.testing import FakeNfs4AclApplier, FakeTransport
+from migration.cutover.activities import CutoverActivities
+from migration.cutover.workflows import (
     AutoFallbackEvaluationWorkflow,
     CutoverWorkflow,
     CutoverWorkflowInput,
 )
-from migration.discovery.types import ACE, FileACL  # noqa: E402
-from migration.models import (  # noqa: E402
+from migration.discovery.testing import DictACLReader
+from migration.discovery.types import ACE, FileACL
+from migration.models import (
     CutoverConfig,
     CutoverMode,
     DestCloud,
@@ -54,29 +54,19 @@ from migration.models import (  # noqa: E402
     SignOffPolicy,
     TransferStatus,
 )
-from migration.orchestration.activities import MigrationActivities  # noqa: E402
-from migration.orchestration.workflows import (  # noqa: E402
+from migration.orchestration.activities import MigrationActivities
+from migration.orchestration.workflows import (
     ApplyPermissionsForBatch,
     ApplyPermissionsForSubtree,
     ApplyPermissionsForSubtreeInput,
 )
-from migration.permission_mapping.loader import load_mapping_table  # noqa: E402
+from migration.permission_mapping.loader import load_mapping_table
 
 TASK_QUEUE = "file-migration-demo"
 SOURCE_ROOT = "/onprem/demo-share"
 RUN_ID = uuid.uuid4().hex[:8]
 
 
-class DictACLReader:
-    """A fake ACL reader keyed by exact path string -- stands in for
-    `icacls`/`Get-Acl` (source) or a re-read of the destination
-    (AWS/Azure verbatim verification)."""
-
-    def __init__(self, acls_by_path: dict[str, FileACL]):
-        self._acls = acls_by_path
-
-    def read_acl(self, path):
-        return self._acls[str(path)]
 
 
 def seed_permission_pipeline_fixture():
@@ -158,18 +148,18 @@ async def run_cutover_demo(client: Client):
     )
     ShadowSyncStatus.objects.update_or_create(
         subtree_path=f"{scope}/q3_report.xlsx",
-        defaults=dict(
-            last_sync_completed_at=timezone.now(),
-            last_sync_lag_seconds=5,
-            pending_change_count=0,
-            consecutive_stable_checks=10,
-        ),
+        defaults={
+            "last_sync_completed_at": timezone.now(),
+            "last_sync_lag_seconds": 5,
+            "pending_change_count": 0,
+            "consecutive_stable_checks": 10,
+        },
     )
     for mismatch_type in ["missing_grant", "extra_grant", "inheritance_divergence", "unresolvable_identity"]:
         SignOffPolicy.objects.get_or_create(
             policy_version="v1",
             mismatch_type=mismatch_type,
-            defaults=dict(action=PolicyAction.LOG_ONLY, active=True, updated_by="demo-seed"),
+            defaults={"action": PolicyAction.LOG_ONLY, "active": True, "updated_by": "demo-seed"},
         )
 
     workflow_id = f"demo-{RUN_ID}-cutover-shadow-write"

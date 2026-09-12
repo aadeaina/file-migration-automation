@@ -284,6 +284,66 @@ choice, over email or PagerDuty) — `SLACK_WEBHOOK_URL`, see
   auto-fallback fired), each with the specific table/view to query
   first, plus a full alert-tier reference table.
 
+## Kubernetes deployment (`k8s/`, `Dockerfile`)
+
+The horizontally-scalable piece is the Temporal worker: it's a
+stateless process polling a shared task queue, so N pod replicas means
+N times the parallel activity throughput with zero workflow code
+changes — Temporal's task queue is a shared work queue by construction.
+
+- `Dockerfile` — multi-stage `uv sync` build; `CMD` runs the worker
+  (`migration.orchestration.worker`).
+- `k8s/00-namespace.yaml`, `05-config.yaml` — namespace, `ConfigMap`
+  (DB/Temporal host settings), `Secret` (placeholder creds — replace
+  before using this anywhere real).
+- `k8s/10-postgres.yaml`, `20-temporal.yaml` — demo-grade in-cluster
+  Postgres and an all-in-one `temporalio/auto-setup` Temporal server +
+  UI. Neither is how you'd run these in production — see "Scaling
+  further" in the project discussion: use a managed Postgres (RDS/Cloud
+  SQL) and either Temporal Cloud or the official multi-service
+  `temporal-helm-charts` instead of `auto-setup`.
+- `k8s/30-migrate-job.yaml` — one-shot `Job` running `manage.py
+  migrate`.
+- `k8s/40-worker-deployment.yaml`, `41-worker-hpa.yaml` — the
+  `Deployment` (2 replicas by default) and an `HorizontalPodAutoscaler`
+  on CPU. CPU is a pragmatic default with no extra components; the
+  metric that actually matters for a Temporal worker is task-queue
+  backlog, which needs KEDA's Temporal `ScaledObject` or a custom
+  metrics adapter — noted in the manifest.
+- `scripts/k8s_smoke_test.py` — starts a real
+  `ApplyPermissionsForSubtree` workflow against the in-cluster Temporal
+  server and asserts the file reaches `verified`, proving the worker
+  `Deployment` actually processes work, not just that the pods start.
+  Needs `WORKER_DEMO_MODE=1` on the worker (see
+  `migration/orchestration/worker.py`) so its activities use fakes for
+  a fixed fixture instead of shelling out to `icacls`/`robocopy`, which
+  don't exist on this plain Linux image.
+
+**Verified locally** (`kind`): built the image, deployed the full
+stack, ran the migrate `Job`, brought up 2 worker replicas, ran the
+smoke test to a `verified` result, then manually scaled to 5 replicas
+and ran it 3 more times to confirm multiple pods share the same task
+queue correctly — all passed. (`kind` has no `metrics-server` by
+default, so the HPA's CPU target reads `<unknown>` there; the scaling
+mechanism itself — more replicas, same queue — is what was verified.)
+
+```bash
+docker build -t file-migration-automation:latest .
+kind create cluster --name file-migration-test   # or use any real cluster
+kind load docker-image file-migration-automation:latest --name file-migration-test
+kubectl apply -k k8s/
+kubectl -n file-migration wait --for=condition=Complete job/migrate --timeout=90s
+kubectl -n file-migration rollout status deployment/migration-worker
+
+# Smoke test (temporary demo mode):
+kubectl -n file-migration set env deployment/migration-worker WORKER_DEMO_MODE=1
+kubectl -n file-migration rollout status deployment/migration-worker
+kubectl -n file-migration apply -f k8s/90-smoke-test-job.yaml
+kubectl -n file-migration wait --for=condition=Complete job/k8s-smoke-test --timeout=60s
+kubectl -n file-migration logs job/k8s-smoke-test
+kubectl -n file-migration set env deployment/migration-worker WORKER_DEMO_MODE-
+```
+
 ## Tests
 
 ```bash

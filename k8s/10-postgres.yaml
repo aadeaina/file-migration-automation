@@ -1,0 +1,51 @@
+# Demo-grade Postgres for the cluster: one replica, emptyDir storage.
+# For real use, point DB_HOST at a managed instance (RDS/Cloud SQL)
+# instead of running Postgres in-cluster at all -- see the scalability
+# discussion in README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: file-migration
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: app-secrets, key: DB_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: app-secrets, key: DB_PASSWORD}}
+            - name: POSTGRES_DB
+              value: file_migration
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "file_migration"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: file-migration
+spec:
+  selector: {app: postgres}
+  ports:
+    - port: 5432
+      targetPort: 5432

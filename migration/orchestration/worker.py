@@ -9,6 +9,15 @@ that go through the Django ORM, and Temporal's default sandbox isn't a
 good fit for that combination. Determinism inside the workflow bodies
 themselves (no direct I/O, no non-deterministic calls) is preserved by
 construction -- all I/O happens in activities.
+
+Set `WORKER_DEMO_MODE=1` to construct `MigrationActivities` with the
+same fakes `scripts/demo_run.py` uses (`FakeTransport`,
+`FakeNfs4AclApplier`, a dict-keyed ACL reader for a fixed demo fixture)
+instead of the real defaults (which shell out to `icacls`/`robocopy`/
+`azcopy`/`nfs4_setfacl` and need a real Windows-adjacent host to work).
+This is what lets `scripts/k8s_smoke_test.py` prove a full pending ->
+verified run through the worker Deployment in a plain Linux container
+with no real file server or cloud APIs reachable.
 """
 
 from __future__ import annotations
@@ -36,10 +45,38 @@ from migration.orchestration.workflows import (
 
 TASK_QUEUE = "file-migration"
 
+# Fixture paths for WORKER_DEMO_MODE, shared with scripts/k8s_smoke_test.py.
+DEMO_SOURCE_PATH = "/onprem/k8s-smoke/report.csv"
+DEMO_DEST_PATH = "/fsx/k8s-smoke/report.csv"
 
-async def run_worker(target_host: str = "localhost:7233") -> None:
+
+def _build_demo_permission_activities() -> MigrationActivities:
+    from migration.cloud_adapters.aws import AWSAdapter
+    from migration.cloud_adapters.testing import FakeTransport
+    from migration.discovery.testing import DictACLReader
+    from migration.discovery.types import ACE, FileACL
+
+    acl = FileACL(
+        owner="DOMAIN\\admin",
+        group=None,
+        aces=(ACE(identity="DOMAIN\\jane.doe", rights=frozenset({"ReadData"}), allow=True, inherited=False),),
+    )
+    return MigrationActivities(
+        aws_adapter=AWSAdapter(
+            transport=FakeTransport(),
+            dest_acl_reader=DictACLReader({DEMO_DEST_PATH: acl}),
+        ),
+        source_acl_reader=DictACLReader({DEMO_SOURCE_PATH: acl}),
+    )
+
+
+async def run_worker(target_host: str | None = None) -> None:
+    target_host = target_host or os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     client = await Client.connect(target_host)
-    permission_activities = MigrationActivities()
+    demo_mode = os.environ.get("WORKER_DEMO_MODE") == "1"
+    permission_activities = (
+        _build_demo_permission_activities() if demo_mode else MigrationActivities()
+    )
     cutover_activities = CutoverActivities()
 
     worker = Worker(

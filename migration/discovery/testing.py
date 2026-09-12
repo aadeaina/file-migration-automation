@@ -16,3 +16,16 @@ class FakeACLReader:
     def read_acl(self, path: Path) -> FileACL:
         rel = str(path.relative_to(self._root))
         return self._acls[rel]
+
+
+class DictACLReader:
+    """Keyed by exact absolute path string, unlike `FakeACLReader` (which
+    keys relative to a crawl root) -- stands in for a re-read of a
+    specific source/dest path, e.g. `IcaclsACLReader` or a cloud
+    adapter's own dest ACL reader, without needing an actual filesystem."""
+
+    def __init__(self, acls_by_path: dict[str, FileACL]):
+        self._acls = acls_by_path
+
+    def read_acl(self, path: Path | str) -> FileACL:
+        return self._acls[str(path)]
