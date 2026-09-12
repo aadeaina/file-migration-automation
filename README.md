@@ -304,12 +304,35 @@ changes — Temporal's task queue is a shared work queue by construction.
   `temporal-helm-charts` instead of `auto-setup`.
 - `k8s/30-migrate-job.yaml` — one-shot `Job` running `manage.py
   migrate`.
-- `k8s/40-worker-deployment.yaml`, `41-worker-hpa.yaml` — the
-  `Deployment` (2 replicas by default) and an `HorizontalPodAutoscaler`
-  on CPU. CPU is a pragmatic default with no extra components; the
-  metric that actually matters for a Temporal worker is task-queue
-  backlog, which needs KEDA's Temporal `ScaledObject` or a custom
-  metrics adapter — noted in the manifest.
+- `k8s/40-worker-deployment.yaml` — the worker `Deployment` (2 replicas
+  by default). Two mutually-exclusive scaling options target it —
+  apply exactly one, never both (a Deployment can only have one
+  autoscaler):
+  - `k8s/41-worker-hpa.yaml` — plain CPU-based `HorizontalPodAutoscaler`.
+    Simple, no extra components, but CPU is a weak proxy for "is there
+    work waiting" — a worker can be CPU-idle while starved, or
+    CPU-busy while draining a backlog efficiently.
+  - `k8s/50-keda-scaler.yaml` — **KEDA**, scaling on Temporal's own
+    `approximate_backlog_count` for the "file-migration" task queue
+    (queried live via `DescribeTaskQueue`, no Prometheus needed) —
+    the metric that actually reflects real work waiting. Also gets
+    genuine scale-to-zero: `minReplicaCount: 0` means no pods running
+    (and nothing polling) between migration runs, scaling up the
+    moment real backlog appears.
+    - `keda-scaler/` — the scaler service itself: implements KEDA's
+      `ExternalScaler` gRPC contract (`externalscaler.proto`, copied
+      verbatim from [KEDA's repo](https://github.com/kedacore/keda/blob/main/pkg/scalers/externalscaler/externalscaler.proto)
+      so it matches exactly) against a small Python `grpc.aio` server.
+      `IsActive` and `GetMetrics` both call the same backlog query so
+      they can never disagree about whether work is waiting.
+    - Requires KEDA installed in the cluster: `helm install keda
+      kedacore/keda -n keda-system --create-namespace`.
+    - Note on `approximate_backlog_count`: it's genuinely approximate
+      and needs Temporal Server **1.25+** — the `temporalio/auto-setup:1.24`
+      tag silently returns zeroed stats (no error) since it predates
+      the feature; discovered this by testing against a live server
+      and getting suspiciously-always-zero backlog, not by reading
+      changelogs. `k8s/20-temporal.yaml` pins `1.29.7`.
 - `scripts/k8s_smoke_test.py` — starts a real
   `ApplyPermissionsForSubtree` workflow against the in-cluster Temporal
   server and asserts the file reaches `verified`, proving the worker
@@ -319,13 +342,27 @@ changes — Temporal's task queue is a shared work queue by construction.
   a fixed fixture instead of shelling out to `icacls`/`robocopy`, which
   don't exist on this plain Linux image.
 
-**Verified locally** (`kind`): built the image, deployed the full
-stack, ran the migrate `Job`, brought up 2 worker replicas, ran the
-smoke test to a `verified` result, then manually scaled to 5 replicas
-and ran it 3 more times to confirm multiple pods share the same task
-queue correctly — all passed. (`kind` has no `metrics-server` by
-default, so the HPA's CPU target reads `<unknown>` there; the scaling
-mechanism itself — more replicas, same queue — is what was verified.)
+**Verified locally** (`kind`):
+- **CPU HPA path**: built the image, deployed the full stack, ran the
+  migrate `Job`, brought up 2 worker replicas, ran the smoke test to a
+  `verified` result, then manually scaled to 5 replicas and ran it 3
+  more times to confirm multiple pods share the same task queue
+  correctly — all passed. (`kind` has no `metrics-server` by default,
+  so the CPU HPA's target reads `<unknown>` there; the scaling
+  mechanism itself — more replicas, same queue — is what was verified.)
+- **KEDA path**: installed KEDA via Helm, deployed the scaler +
+  `ScaledObject` with `minReplicaCount: 0`. Confirmed the full
+  lifecycle live: idle → KEDA scaled `migration-worker` to 0 on its
+  own (real scale-to-zero, watched the pods actually terminate) →
+  started the smoke test job with zero workers running → KEDA detected
+  real backlog and scaled to 1 (watched the pod go Pending →
+  ContainerCreating → Running) → the workflow reached `verified` →
+  after the 60s cooldown with no more backlog, scaled back to 0.
+  Verified the DB row's `workflow_id` field to rule out a stale
+  cached result. Also hit and fixed two real bugs along the way: the
+  trigger `type` in the `ScaledObject` is `external`, not
+  `external-grpc` (KEDA errors clearly: "no scaler found for type");
+  and the version pin issue above.
 
 ```bash
 docker build -t file-migration-automation:latest .
@@ -333,6 +370,16 @@ kind create cluster --name file-migration-test   # or use any real cluster
 kind load docker-image file-migration-automation:latest --name file-migration-test
 kubectl apply -k k8s/
 kubectl -n file-migration wait --for=condition=Complete job/migrate --timeout=90s
+
+# Pick ONE scaling option:
+kubectl apply -f k8s/41-worker-hpa.yaml     # CPU-based, no extra components
+# --- or ---
+helm repo add kedacore https://kedacore.github.io/charts
+helm install keda kedacore/keda -n keda-system --create-namespace
+docker build -f keda-scaler/Dockerfile -t keda-temporal-scaler:latest .
+kind load docker-image keda-temporal-scaler:latest --name file-migration-test
+kubectl apply -f k8s/50-keda-scaler.yaml
+
 kubectl -n file-migration rollout status deployment/migration-worker
 
 # Smoke test (temporary demo mode):

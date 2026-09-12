@@ -7,4 +7,9 @@ resources:
   - 20-temporal.yaml
   - 30-migrate-job.yaml
   - 40-worker-deployment.yaml
-  - 41-worker-hpa.yaml
+  # 41-worker-hpa.yaml (CPU-based) and 50-keda-scaler.yaml
+  # (Temporal-backlog-based, needs KEDA installed) both scale
+  # migration-worker and MUST NOT be applied together -- two
+  # autoscalers targeting the same Deployment conflict. Pick one and
+  # apply it on top of this base: `kubectl apply -f k8s/41-worker-hpa.yaml`
+  # or `kubectl apply -f k8s/50-keda-scaler.yaml`, not both.
