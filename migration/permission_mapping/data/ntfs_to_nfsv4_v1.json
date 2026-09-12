@@ -1,0 +1,51 @@
+{
+  "version": "1.0",
+  "mappings": [
+    {"ntfs_right": "ReadData", "object_type": "file", "ace4_bit": "ACE4_READ_DATA", "confidence": "exact"},
+    {"ntfs_right": "ReadData", "object_type": "directory", "ace4_bit": "ACE4_LIST_DIRECTORY", "confidence": "exact"},
+
+    {"ntfs_right": "WriteData", "object_type": "file", "ace4_bit": "ACE4_WRITE_DATA", "confidence": "exact"},
+    {"ntfs_right": "WriteData", "object_type": "directory", "ace4_bit": "ACE4_ADD_FILE", "confidence": "exact"},
+
+    {"ntfs_right": "AppendData", "object_type": "file", "ace4_bit": "ACE4_APPEND_DATA", "confidence": "exact"},
+    {"ntfs_right": "AppendData", "object_type": "directory", "ace4_bit": "ACE4_ADD_SUBDIRECTORY", "confidence": "exact"},
+
+    {"ntfs_right": "ReadExtendedAttributes", "object_type": "file", "ace4_bit": "ACE4_READ_NAMED_ATTRS", "confidence": "partial"},
+    {"ntfs_right": "ReadExtendedAttributes", "object_type": "directory", "ace4_bit": "ACE4_READ_NAMED_ATTRS", "confidence": "partial"},
+
+    {"ntfs_right": "WriteExtendedAttributes", "object_type": "file", "ace4_bit": "ACE4_WRITE_NAMED_ATTRS", "confidence": "partial"},
+    {"ntfs_right": "WriteExtendedAttributes", "object_type": "directory", "ace4_bit": "ACE4_WRITE_NAMED_ATTRS", "confidence": "partial"},
+
+    {"ntfs_right": "ExecuteFile", "object_type": "file", "ace4_bit": "ACE4_EXECUTE", "confidence": "exact"},
+    {"ntfs_right": "ExecuteFile", "object_type": "directory", "ace4_bit": "ACE4_EXECUTE", "confidence": "exact"},
+
+    {"ntfs_right": "DeleteSubdirectoriesAndFiles", "object_type": "directory", "ace4_bit": "ACE4_DELETE_CHILD", "confidence": "exact"},
+
+    {"ntfs_right": "Delete", "object_type": "file", "ace4_bit": "ACE4_DELETE", "confidence": "exact"},
+    {"ntfs_right": "Delete", "object_type": "directory", "ace4_bit": "ACE4_DELETE", "confidence": "exact"},
+
+    {"ntfs_right": "ReadAttributes", "object_type": "file", "ace4_bit": "ACE4_READ_ATTRIBUTES", "confidence": "exact"},
+    {"ntfs_right": "ReadAttributes", "object_type": "directory", "ace4_bit": "ACE4_READ_ATTRIBUTES", "confidence": "exact"},
+
+    {"ntfs_right": "WriteAttributes", "object_type": "file", "ace4_bit": "ACE4_WRITE_ATTRIBUTES", "confidence": "exact"},
+    {"ntfs_right": "WriteAttributes", "object_type": "directory", "ace4_bit": "ACE4_WRITE_ATTRIBUTES", "confidence": "exact"},
+
+    {"ntfs_right": "ReadPermissions", "object_type": "file", "ace4_bit": "ACE4_READ_ACL", "confidence": "exact"},
+    {"ntfs_right": "ReadPermissions", "object_type": "directory", "ace4_bit": "ACE4_READ_ACL", "confidence": "exact"},
+
+    {"ntfs_right": "ChangePermissions", "object_type": "file", "ace4_bit": "ACE4_WRITE_ACL", "confidence": "exact"},
+    {"ntfs_right": "ChangePermissions", "object_type": "directory", "ace4_bit": "ACE4_WRITE_ACL", "confidence": "exact"},
+
+    {"ntfs_right": "TakeOwnership", "object_type": "file", "ace4_bit": "ACE4_WRITE_OWNER", "confidence": "policy_decision"},
+    {"ntfs_right": "TakeOwnership", "object_type": "directory", "ace4_bit": "ACE4_WRITE_OWNER", "confidence": "policy_decision"},
+
+    {"ntfs_right": "Synchronize", "object_type": "file", "ace4_bit": "ACE4_SYNCHRONIZE", "confidence": "exact"},
+    {"ntfs_right": "Synchronize", "object_type": "directory", "ace4_bit": "ACE4_SYNCHRONIZE", "confidence": "exact"}
+  ],
+  "inheritance_map": [
+    {"ntfs_flag": "ObjectInherit", "ace4_flag": "ACE4_FILE_INHERIT_ACE"},
+    {"ntfs_flag": "ContainerInherit", "ace4_flag": "ACE4_DIRECTORY_INHERIT_ACE"},
+    {"ntfs_flag": "InheritOnly", "ace4_flag": "ACE4_INHERIT_ONLY_ACE"},
+    {"ntfs_flag": "NoPropagateInherit", "ace4_flag": "ACE4_NO_PROPAGATE_INHERIT_ACE"}
+  ]
+}

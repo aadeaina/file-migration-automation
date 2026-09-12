@@ -1,0 +1,30 @@
+[project]
+name = "file-migration-automation"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=6.1.1",
+    "hvac>=2.4.0",
+    "psycopg[binary]>=3.3.5",
+    "python-dotenv>=1.2.3",
+    "temporalio>=1.32.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-django>=4.14.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# RUF012: Django's `class Meta: constraints = [...]` / `indexes = [...]`
+# convention always looks like a mutable class default to ruff; it isn't
+# one in Django's model system.
+# PLW1510: the few subprocess.run() calls without check=True inspect
+# returncode themselves to build a structured FileOutcome instead of
+# raising CalledProcessError.
+ignore = ["RUF012", "PLW1510"]
