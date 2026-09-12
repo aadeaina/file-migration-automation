@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from django.db import transaction
+
 from migration.diffing.diff import diff_effective_access
 from migration.diffing.effective_access import (
     effective_access_from_ace4,
@@ -22,6 +24,8 @@ from migration.models import (
     MigrationFileStatus,
     SignOffPolicy,
 )
+
+DEFAULT_DIFF_CHUNK_SIZE = 2000
 
 
 def _active_policy_version(mismatch_type: str) -> str | None:
@@ -59,7 +63,14 @@ def diff_file(
 
     diff_rows = diff_effective_access(source_effective, dest_effective, orphaned)
 
-    EffectivePermissionDiff.objects.filter(file_id=row.id, reviewed=False).delete()
+    # One query for both the "delete stale unreviewed rows" and "what's
+    # already settled" checks, not two -- at 2M files, most of which have
+    # zero prior diff rows, this halves the per-file query count for the
+    # common case where there's nothing to clean up or compare against.
+    existing = list(EffectivePermissionDiff.objects.filter(file_id=row.id))
+    stale_unreviewed_ids = [d.id for d in existing if not d.reviewed]
+    if stale_unreviewed_ids:
+        EffectivePermissionDiff.objects.filter(id__in=stale_unreviewed_ids).delete()
 
     # A reviewed row (e.g. one carrying an approved DiffException) whose
     # (identity, mismatch_type, access) is unchanged since it was reviewed
@@ -67,7 +78,8 @@ def diff_file(
     # just because nothing actually changed.
     settled = {
         (d.identity, d.mismatch_type, tuple(d.source_access), tuple(d.dest_access))
-        for d in EffectivePermissionDiff.objects.filter(file_id=row.id, reviewed=True)
+        for d in existing
+        if d.reviewed
     }
 
     created = []
@@ -100,14 +112,30 @@ def diff_subtree(
     source_acl_reader: ACLReader | None = None,
     dest_acl_reader: ACLReader | None = None,
     gcp_acl_applier=None,
+    chunk_size: int = DEFAULT_DIFF_CHUNK_SIZE,
+    collect_created: bool = True,
 ) -> list[EffectivePermissionDiff]:
+    """Diffs every file under `root_path` for `dest_cloud`. Streams the
+    candidate rows via `.iterator()` (inside a transaction, per Django's
+    requirement for a stable server-side cursor) rather than the default
+    queryset behavior of caching the entire matched result set in memory
+    -- at 2M files that cache is the whole subtree's `MigrationFileStatus`
+    rows held at once just to iterate them.
+
+    `collect_created=False` skips accumulating the return list for
+    subtree-sized runs where the caller doesn't need every created diff
+    back (mismatches are expected to be rare, but not guaranteed to be).
+    """
     source_acl_reader = source_acl_reader or IcaclsACLReader()
     dest_acl_reader = dest_acl_reader or IcaclsACLReader()
 
-    rows = MigrationFileStatus.objects.filter(
-        dest_cloud=dest_cloud, source_path__startswith=root_path
-    )
     created: list[EffectivePermissionDiff] = []
-    for row in rows:
-        created.extend(diff_file(row, source_acl_reader, dest_acl_reader, gcp_acl_applier))
+    with transaction.atomic():
+        rows = MigrationFileStatus.objects.filter(
+            dest_cloud=dest_cloud, source_path__startswith=root_path
+        ).iterator(chunk_size=chunk_size)
+        for row in rows:
+            result = diff_file(row, source_acl_reader, dest_acl_reader, gcp_acl_applier)
+            if collect_created:
+                created.extend(result)
     return created

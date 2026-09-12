@@ -11,6 +11,7 @@ not to be a full NTFS inheritance engine.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,14 +74,22 @@ def _detect_anomalies(
     return anomalies
 
 
-def walk_tree(root: Path | str, acl_reader: ACLReader) -> list[ManifestEntry]:
+def walk_tree(root: Path | str, acl_reader: ACLReader) -> Iterator[ManifestEntry]:
     """Recursively walk `root`, reading each file/directory's ACL via
-    `acl_reader` and producing one `ManifestEntry` per filesystem object
-    (root itself excluded)."""
-    root = Path(root)
-    manifest: list[ManifestEntry] = []
+    `acl_reader` and yielding one `ManifestEntry` per filesystem object
+    (root itself excluded).
 
-    def _visit(dir_path: Path, depth: int, carry_forward: list[_CarryForwardACE]) -> None:
+    A generator, not a list-builder: at 2M+ files, materializing the
+    whole tree in memory before returning is the difference between
+    this running in constant memory and needing gigabytes just to hold
+    ACL data for files nobody's looking at yet. Callers that genuinely
+    need the full list (small trees, tests) can still do `list(walk_tree(...))`.
+    """
+    root = Path(root)
+
+    def _visit(
+        dir_path: Path, depth: int, carry_forward: list[_CarryForwardACE]
+    ) -> Iterator[ManifestEntry]:
         try:
             children = sorted(dir_path.iterdir(), key=lambda p: p.name)
         except OSError:
@@ -93,15 +102,13 @@ def walk_tree(root: Path | str, acl_reader: ACLReader) -> list[ManifestEntry]:
             anomalies = _detect_anomalies(acl.aces, expected)
             size = 0 if is_dir else child.stat().st_size
 
-            manifest.append(
-                ManifestEntry(
-                    path=str(child.relative_to(root)),
-                    is_dir=is_dir,
-                    size=size,
-                    depth=depth,
-                    acl=acl,
-                    anomalies=anomalies,
-                )
+            yield ManifestEntry(
+                path=str(child.relative_to(root)),
+                is_dir=is_dir,
+                size=size,
+                depth=depth,
+                acl=acl,
+                anomalies=anomalies,
             )
 
             if is_dir:
@@ -109,7 +116,6 @@ def walk_tree(root: Path | str, acl_reader: ACLReader) -> list[ManifestEntry]:
                 child_carry_forward = [
                     c for c in carry_forward if c.inherit_to_subfolders
                 ] + own_inheritable
-                _visit(child, depth + 1, child_carry_forward)
+                yield from _visit(child, depth + 1, child_carry_forward)
 
-    _visit(root, 0, [])
-    return manifest
+    yield from _visit(root, 0, [])

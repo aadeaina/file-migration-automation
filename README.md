@@ -46,10 +46,15 @@ actually creates. One addition beyond the original schema:
 - `crawler.py` — `walk_tree(root, acl_reader)` recursively crawls,
   flagging `orphaned_sid`, `explicit_deny_ace`, and `broken_inheritance`
   (a deliberately simplified one-ancestor-chain inheritance model, not
-  a full NTFS propagation engine — see the module docstring).
-- `manifest.py` — manifest is JSON (doubles as the raw-ACL store,
-  keyed by path) and `load_manifest_into_db` fans each file out to a
-  `MigrationFileStatus` row per destination cloud.
+  a full NTFS propagation engine — see the module docstring). A
+  generator, not a list-builder — at 2M+ files, the whole tree was
+  never meant to sit in memory at once.
+- `manifest.py` — the manifest is JSONL (one object per line, streamed;
+  doubles as the raw-ACL store, keyed by path) and
+  `load_manifest_into_db` consumes it in `batch_size`-row chunks via
+  `bulk_create` rather than building every row in memory before one
+  call — at 2M files × 3 clouds that's the difference between bounded
+  memory and 6M model instances held at once.
 - `testing.py` / `FakeACLReader` — lets tests build a real directory
   tree and inject ACLs without needing actual NTFS (macOS/Linux dev
   boxes don't have it).
@@ -160,7 +165,11 @@ independently against any subtree, per the brief.
   idempotent — a file's *unreviewed* diffs are recomputed each time,
   but a diff that already carries a review decision (e.g. an approved
   `DiffException`) is left alone as long as the recomputed state
-  matches what was reviewed.
+  matches what was reviewed. `diff_subtree` streams its candidate rows
+  via `.iterator()` instead of caching the full matched result set —
+  at 2M files that cache is the whole subtree held in memory just to
+  iterate it — and `diff_file` does one query (not two) for the
+  common case of a file with no prior diffs and nothing new to report.
 - `gate.py` — the sign-off gate is a query against the `SignOffGate`
   view (Phase 1), never a reimplementation of its policy logic in
   Python, per the brief.
@@ -278,7 +287,7 @@ choice, over email or PagerDuty) — `SLACK_WEBHOOK_URL`, see
 ## Tests
 
 ```bash
-uv run pytest -q                          # 119 passed (fast, no external deps)
+uv run pytest -q                          # 127 passed (fast, no external deps)
 uv run pytest -m temporal_integration -q  # needs `temporal server start-dev` (8 tests)
 uvx ruff check migration
 ```

@@ -4,11 +4,13 @@ inheritance_divergence, and confirm the gate is blocked given seeded
 "all block" SignOffPolicy rows.
 """
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from migration.cloud_adapters.testing import FakeDestACLReader
 from migration.diffing.gate import blocked_entries_for_subtree, is_subtree_blocked
-from migration.diffing.run_diff import diff_file
+from migration.diffing.run_diff import diff_file, diff_subtree
 from migration.discovery.types import ACE, FileACL
 from migration.models import (
     DestCloud,
@@ -126,3 +128,75 @@ class DiffFileTest(TestCase):
 
         self.assertEqual(created, [])
         self.assertFalse(is_subtree_blocked("/onprem/share"))
+
+    def test_a_file_with_no_prior_diffs_and_no_new_mismatches_issues_one_query(self):
+        """The common case at scale: most files have never had a diff row
+        and produce none now. That should cost one read query, not a
+        delete + a separate settled-check query on top."""
+        clean_row = MigrationFileStatus.objects.create(
+            source_path="/onprem/share/clean.csv",
+            dest_cloud=DestCloud.AWS,
+            dest_path="/fsx/share/clean.csv",
+        )
+        acl = FileACL(
+            owner="",
+            group=None,
+            aces=(ACE(identity="DOMAIN\\a", rights=frozenset({"ReadData"}), allow=True, inherited=False),),
+        )
+        reader = FakeDestACLReader(
+            {"/onprem/share/clean.csv": acl, "/fsx/share/clean.csv": acl}
+        )
+
+        with CaptureQueriesContext(connection) as ctx:
+            created = diff_file(clean_row, reader, reader)
+
+        self.assertEqual(created, [])
+        diff_queries = [q for q in ctx.captured_queries if "effective_permission_diff" in q["sql"]]
+        self.assertEqual(len(diff_queries), 1)
+
+
+class DiffSubtreeScalabilityTest(TestCase):
+    def test_streams_rows_via_iterator_and_processes_every_file(self):
+        for i in range(5):
+            MigrationFileStatus.objects.create(
+                source_path=f"/onprem/share/file_{i}.csv",
+                dest_cloud=DestCloud.AWS,
+                dest_path=f"/fsx/share/file_{i}.csv",
+            )
+        acl = FileACL(owner="", group=None, aces=())
+        reader = FakeDestACLReader(
+            {
+                p: acl
+                for i in range(5)
+                for p in (f"/onprem/share/file_{i}.csv", f"/fsx/share/file_{i}.csv")
+            }
+        )
+
+        created = diff_subtree(
+            "/onprem/share", DestCloud.AWS, reader, reader, chunk_size=2
+        )
+
+        self.assertEqual(created, [])  # no ACEs on either side -> nothing to diff
+
+    def test_collect_created_false_skips_building_the_return_list(self):
+        row = MigrationFileStatus.objects.create(
+            source_path="/onprem/share/x.csv", dest_cloud=DestCloud.AWS, dest_path="/fsx/share/x.csv"
+        )
+        source_acl = FileACL(
+            owner="", group=None,
+            aces=(ACE(identity="DOMAIN\\a", rights=frozenset({"ReadData"}), allow=True, inherited=False),),
+        )
+        dest_acl = FileACL(owner="", group=None, aces=())
+        reader = FakeDestACLReader(
+            {"/onprem/share/x.csv": source_acl, "/fsx/share/x.csv": dest_acl}
+        )
+
+        result = diff_subtree(
+            "/onprem/share", DestCloud.AWS, reader, reader, collect_created=False
+        )
+
+        self.assertEqual(result, [])
+        # The diff was still written to the DB -- just not returned.
+        self.assertEqual(
+            EffectivePermissionDiff.objects.filter(file_id=row.id).count(), 1
+        )
