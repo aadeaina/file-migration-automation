@@ -249,20 +249,42 @@ environment having no real per-cloud secrets manager access anyway.
 
 ### Phase 9 — Monitoring, alerting, runbook
 
-Notification channel: a single Slack incoming webhook (the user's
-choice, over email or PagerDuty) — `SLACK_WEBHOOK_URL`, see
-`migration/monitoring/channels.py`.
+Two notification channels, for two different jobs:
+- **Alertmanager** (`ALERTMANAGER_URL`) — the primary path for
+  page-immediately alerts. Dedup, grouping, silencing, and auto-resolve
+  are Alertmanager's job, not ours — see `alertmanager.py` below.
+- **Slack webhook** (`SLACK_WEBHOOK_URL`, the user's original choice) —
+  still used for the daily digest (a periodic summary, not a
+  per-item alert that needs fingerprint dedup) and as a fallback
+  page-immediately channel when Alertmanager isn't configured.
 
+- `alertmanager.py` — `AlertmanagerChannel.fire(alertname, subject_key,
+  summary, severity)` POSTs to Alertmanager's `/api/v2/alerts`, labeled
+  by `(alertname, subject)`. Deliberately never sets `endsAt`: an issue
+  that keeps getting re-fired stays "firing", and simply stops being
+  reported once fixed, so Alertmanager auto-resolves it via its own
+  `resolve_timeout` — no "mark this fixed" logic needed in our code.
+  This replaced a hand-rolled `AlertLog` dedup table (still used as the
+  fallback for plain `.send()`-only channels like Slack, which have no
+  native dedup of their own) after a design review flagged that
+  Alertmanager already solves dedup/grouping/silencing properly and a
+  bespoke reimplementation was the weakest part of this phase.
+  Verified against a real local Alertmanager: fired the same
+  `(alertname, subject)` three times (two identical) and confirmed via
+  `/api/v2/alerts` that exactly 2 distinct alerts existed, with
+  `endsAt` auto-set 5 minutes out by Alertmanager's default
+  `resolve_timeout` — not something this code sets itself.
 - `page_immediately.py` — two of the four page-immediately conditions
   are poll-based scans over existing tables (`check_for_new_extra_grants`
   over `EffectivePermissionDiff`, `check_for_stuck_retries` over
-  `MigrationFileStatus.retry_count`, now actually incremented on an
-  `apply_acl` failure), deduplicated via a new `AlertLog` table so the
-  same row never re-pages. The other two — an auto-fallback mode change,
-  a cloud auth failure — are event-driven and page at their own call
-  site (`migration/cutover/activities.py`, `migration/orchestration/activities.py`)
-  rather than being polled, since they're already known the instant
-  they happen.
+  `MigrationFileStatus.retry_count`, incremented on an `apply_acl`
+  failure). With a `FiringChannel` (Alertmanager), every currently-open
+  issue is re-fired every run and Alertmanager owns suppressing
+  repeats; with a plain channel, `AlertLog` gates on "is this row
+  new". The other two conditions — an auto-fallback mode change, a
+  cloud auth failure — are event-driven and page at their own call site
+  (`migration/cutover/activities.py`, `migration/orchestration/activities.py`)
+  rather than being polled.
 - `daily_digest.py` — `missing_grant`/`inheritance_divergence` counts,
   files stuck in `failed` past an age threshold, and unactioned
   `SubtreesNeedingFallbackReview` entries, all read straight off

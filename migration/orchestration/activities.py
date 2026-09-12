@@ -264,6 +264,7 @@ class MigrationActivities:
                 "cloud_auth_failure",
                 f"failed to fetch credential for {input.dest_cloud} (file {input.file_status_id}): {exc}",
                 self.notification_channel,
+                subject_key=input.dest_cloud,
             )
             raise
 

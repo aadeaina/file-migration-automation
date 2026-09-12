@@ -153,7 +153,9 @@ that scope, and only do so once the root cause is fixed.
 | Daily digest | `missing_grant`/`inheritance_divergence` counts, stuck-failed files, unactioned fallback subtrees | `migration.monitoring.daily_digest.build_daily_digest` |
 | Dashboard only | Throughput, completion % per cloud, mapping confidence distribution | `migration.monitoring.dashboard` |
 
-All page-immediately checks dedup via `alert_log` — the same
-underlying row/event only fires once. Notification channel: a single
-Slack incoming webhook (`SLACK_WEBHOOK_URL`), see
-`migration/monitoring/channels.py`.
+Dedup: with Alertmanager configured (`ALERTMANAGER_URL`), it owns
+dedup/grouping/silencing/auto-resolve by label fingerprint — page
+checks simply re-fire every currently-open issue each run. Without it,
+`alert_log` is the fallback (a plain Slack webhook has no native
+dedup), gating so the same underlying row only pages once. See
+`migration/monitoring/alertmanager.py` and `channels.py`.

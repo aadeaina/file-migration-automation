@@ -162,5 +162,6 @@ class CutoverActivities:
                 f"scope {config.scope} switched to hard_freeze automatically: "
                 f"{config.fallback_reason}",
                 self.notification_channel,
+                subject_key=config.scope,
             )
         return [c.scope for c in new_configs]

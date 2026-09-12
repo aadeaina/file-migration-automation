@@ -14,7 +14,7 @@ from migration.monitoring.page_immediately import (
     check_for_stuck_retries,
     run_page_immediately_checks,
 )
-from migration.monitoring.testing import FakeChannel
+from migration.monitoring.testing import FakeChannel, FakeFiringChannel
 
 
 class CheckForNewExtraGrantsTest(TestCase):
@@ -77,6 +77,49 @@ class CheckForNewExtraGrantsTest(TestCase):
 
         self.assertEqual(alerted, [])
         self.assertEqual(channel.messages, [])
+
+
+class CheckForNewExtraGrantsWithFiringChannelTest(TestCase):
+    """With an Alertmanager-style channel, dedup is Alertmanager's job:
+    every currently-open extra_grant re-fires on every run, unlike the
+    AlertLog-backed .send() path above."""
+
+    def setUp(self):
+        self.row = MigrationFileStatus.objects.create(
+            source_path="/onprem/share/report.csv",
+            dest_cloud=DestCloud.AWS,
+            dest_path="/fsx/share/report.csv",
+        )
+        self.diff = EffectivePermissionDiff.objects.create(
+            file=self.row,
+            identity="DOMAIN\\jane",
+            source_access=["read"],
+            dest_access=["read", "write"],
+            mismatch_type=MismatchType.EXTRA_GRANT,
+            severity="critical",
+        )
+
+    def test_fires_a_labeled_alert(self):
+        channel = FakeFiringChannel()
+
+        check_for_new_extra_grants(channel)
+
+        self.assertEqual(len(channel.fired), 1)
+        alertname, subject_key, summary, severity = channel.fired[0]
+        self.assertEqual(alertname, "extra_grant")
+        self.assertEqual(subject_key, str(self.diff.id))
+        self.assertIn("DOMAIN\\jane", summary)
+        self.assertEqual(severity, "critical")
+
+    def test_re_fires_on_every_run_no_alertlog_bookkeeping(self):
+        channel = FakeFiringChannel()
+
+        check_for_new_extra_grants(channel)
+        second_alerted = check_for_new_extra_grants(channel)
+
+        self.assertEqual(len(second_alerted), 1)  # still reported as open
+        self.assertEqual(len(channel.fired), 2)  # fired again, not suppressed here
+        self.assertFalse(AlertLog.objects.exists())  # no dedup bookkeeping used
 
 
 class CheckForStuckRetriesTest(TestCase):
