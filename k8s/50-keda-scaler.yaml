@@ -1,49 +1,11 @@
-# The KEDA external scaler: implements KEDA's ExternalScaler gRPC
-# contract, querying Temporal's own DescribeTaskQueue API for the
-# "file-migration" task queue's approximate_backlog_count. Requires
-# KEDA itself installed in the cluster (helm install keda kedacore/keda
-# -n keda-system --create-namespace) -- this manifest only adds the
-# scaler service and the ScaledObject that points migration-worker's
-# scaling at it.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: keda-temporal-scaler
-  namespace: file-migration
-spec:
-  replicas: 1
-  selector:
-    matchLabels: {app: keda-temporal-scaler}
-  template:
-    metadata:
-      labels: {app: keda-temporal-scaler}
-    spec:
-      enableServiceLinks: false
-      containers:
-        - name: scaler
-          image: keda-temporal-scaler:latest
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 6000
-          env:
-            - name: TEMPORAL_ADDRESS
-              value: "temporal:7233"
-            - name: TASK_QUEUE
-              value: "file-migration"
-            - name: TARGET_BACKLOG_PER_POD
-              value: "50"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: keda-temporal-scaler
-  namespace: file-migration
-spec:
-  selector: {app: keda-temporal-scaler}
-  ports:
-    - port: 6000
-      targetPort: 6000
----
+# KEDA's built-in `temporal` scaler (pkg/scalers/temporal_scaler.go) --
+# no custom scaler service needed. An earlier version of this file
+# shipped a hand-written gRPC ExternalScaler doing the exact same
+# DescribeTaskQueue query KEDA already does natively; discovered that
+# by searching for prior art (temporal-community/temporal-scaling-demo)
+# after the fact, deleted the custom service, and replaced it with
+# this. Requires KEDA installed in the cluster:
+#   helm install keda kedacore/keda -n keda-system --create-namespace
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -52,17 +14,19 @@ metadata:
 spec:
   scaleTargetRef:
     name: migration-worker
-  # 0, not 1: this is the actual point of KEDA over a plain HPA -- no
-  # pods running (and paying for) idle polling between migration runs,
-  # scaling up from zero the moment real backlog appears.
+  # 0, not 1: no pods running (and nothing polling) between migration
+  # runs, scaling up the moment real backlog appears.
   minReplicaCount: 0
   maxReplicaCount: 20
-  # Backlog rarely drops to exactly 0 with any regularity in a busy
-  # queue -- give it a minute of quiet before scaling all the way down,
-  # so a brief lull doesn't thrash pods up and down.
   cooldownPeriod: 60
-  pollingInterval: 15
   triggers:
-    - type: external
+    - type: temporal
       metadata:
-        scalerAddress: keda-temporal-scaler.file-migration.svc.cluster.local:6000
+        endpoint: "temporal.file-migration.svc.cluster.local:7233"
+        namespace: "default"
+        taskQueue: "file-migration"
+        targetQueueSize: "50"
+        # Our in-cluster demo Temporal server (temporalio/auto-setup)
+        # doesn't speak TLS -- a real deployment behind TLS should
+        # drop this line (the scaler defaults enableTLS to true).
+        enableTLS: "false"
